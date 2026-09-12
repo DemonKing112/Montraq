@@ -112,11 +112,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   /* ── State ─────────────────────────────────────────────────── */
   let allExpenses = [];
   let categories = [];
-  let period = 'this-month';   // 'this-month' | 'last-month' | 'all-time'
+  let period = 'this-month';   // 'this-month' | 'last-month' | 'all-time' | an explicit 'YYYY-MM' key (fallback)
   let categoryFilter = '';     // '' means all categories
   const PALETTE = ['#3F5D42', '#C99A3E', '#6D5BD0', '#5C8AC9', '#C44536'];
   let chart = null;
   let lastCategoryEntries = [];
+
+  /* True once the user has explicitly picked a period from the dropdown.
+     Before that, the default "This Month" is free to fall back to an
+     earlier month with data — after that, the user is in control and every
+     period (including an empty one) renders exactly as selected. */
+  let userChangedPeriod = false;
 
   const now = new Date();
   const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -129,12 +135,98 @@ document.addEventListener('DOMContentLoaded', async () => {
     'all-time': 'All Time',
   };
 
+  /* ── Month-key helpers ─────────────────────────────────────────
+     Expense dates are plain "YYYY-MM-DD" strings (see CLAUDE.md —
+     calendar dates have no timezone and must never touch `new Date()`
+     for bucketing or comparison). These helpers work on the "YYYY-MM"
+     key directly; `new Date()` is only used below to *format* a label
+     or count days in a month, never to decide which bucket a date
+     string belongs to.                                              */
+  function keyForPeriod(p) {
+    if (p === 'this-month') return thisMonthKey;
+    if (p === 'last-month') return lastMonthKey;
+    return p; // an explicit "YYYY-MM" key, e.g. the fallback month
+  }
+
+  function prevMonthKey(key) {
+    const [y, m] = key.split('-').map(Number);
+    const d = new Date(y, m - 2, 1); // m is 1-indexed; m-2 = previous month, 0-indexed
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  function monthLabel(key) {
+    const [y, m] = key.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  }
+
+  function monthNameOnly(key) {
+    const [y, m] = key.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long' });
+  }
+
+  function daysInMonth(key) {
+    const [y, m] = key.split('-').map(Number);
+    return new Date(y, m, 0).getDate(); // day 0 of next month = last day of this month
+  }
+
+  /* Most recent calendar month that actually has an expense in it,
+     found from the plain date strings — no pagination to worry about,
+     GET /expenses returns everything for the account. */
+  function mostRecentMonthWithData() {
+    if (!allExpenses.length) return null;
+    let maxDate = allExpenses[0].date;
+    for (const e of allExpenses) {
+      if (e.date > maxDate) maxDate = e.date;
+    }
+    return maxDate.slice(0, 7);
+  }
+
+  /* ── Period-fallback banner ─────────────────────────────────── */
+  function showFallbackBanner(emptyKey, fallbackKey) {
+    const banner = document.getElementById('fallback-banner');
+    const text = document.getElementById('fallback-banner-text');
+    if (!banner || !text) return;
+    text.textContent = `No expenses in ${monthNameOnly(emptyKey)} — showing ${monthNameOnly(fallbackKey)} instead.`;
+    banner.hidden = false;
+  }
+
+  function hideFallbackBanner() {
+    const banner = document.getElementById('fallback-banner');
+    if (banner) banner.hidden = true;
+  }
+
+  /* If the default period (This Month) is empty but the account has
+     expenses elsewhere, move the selection itself to the most recent
+     month that has data, so the selector and the rendered numbers agree.
+     Only runs before the user has made an explicit choice — once they
+     pick anything from the dropdown (even "This Month" again), this
+     never overrides them again. */
+  function applyFallbackIfNeeded() {
+    if (userChangedPeriod) return;
+    if (period !== 'this-month' && period !== 'last-month') return;
+    if (!allExpenses.length) return; // genuinely empty account — real empty state, not a bug
+
+    const targetKey = keyForPeriod(period);
+    const hasData = allExpenses.some(e => e.date.startsWith(targetKey));
+    if (hasData) return;
+
+    const fallbackKey = mostRecentMonthWithData();
+    if (!fallbackKey || fallbackKey === targetKey) return;
+
+    showFallbackBanner(targetKey, fallbackKey);
+    period = fallbackKey;
+    document.getElementById('date-range-label').textContent = monthLabel(fallbackKey);
+    document.querySelectorAll('#date-range-menu .dropdown-item').forEach(i => i.classList.remove('active'));
+  }
+
   /* ── Date range dropdown selection ──────────────────────────── */
   document.querySelectorAll('#date-range-menu .dropdown-item').forEach(item => {
     item.addEventListener('click', () => {
+      userChangedPeriod = true;
       period = item.dataset.period;
       document.querySelectorAll('#date-range-menu .dropdown-item').forEach(i => i.classList.toggle('active', i === item));
       document.getElementById('date-range-label').textContent = PERIOD_LABELS[period];
+      hideFallbackBanner();
       render();
     });
   });
@@ -143,6 +235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     [allExpenses, categories] = await Promise.all([getExpenses(), getCategories()]);
     populateCategoryFilter();
+    applyFallbackIfNeeded();
     render();
   } catch (err) {
     if (err.message.includes('401') || err.message.includes('Authentication')) {
@@ -159,6 +252,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!e.persisted) return;
     try {
       allExpenses = await getExpenses();
+      applyFallbackIfNeeded();
       render();
     } catch { /* non-critical on a bfcache restore */ }
   });
@@ -182,20 +276,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   /* ── Period filtering ───────────────────────────────────────── */
   function expensesForPeriod() {
     if (period === 'all-time') return allExpenses;
-    const key = period === 'last-month' ? lastMonthKey : thisMonthKey;
+    const key = keyForPeriod(period);
     return allExpenses.filter(e => e.date.startsWith(key));
   }
 
   function comparisonExpenses() {
-    /* The "vs" period used for delta chips — only meaningful for
-       This Month (vs last month). Other views hide the delta. */
-    if (period === 'this-month') return allExpenses.filter(e => e.date.startsWith(lastMonthKey));
-    if (period === 'last-month') {
-      const prev = new Date(lastMonthDate.getFullYear(), lastMonthDate.getMonth() - 1, 1);
-      const prevKey = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
-      return allExpenses.filter(e => e.date.startsWith(prevKey));
-    }
-    return [];
+    /* The "vs" period used for delta chips — the month immediately
+       before whichever month is actually selected, including a
+       fallback month. All-time has no meaningful comparison. */
+    if (period === 'all-time') return [];
+    const prevKey = prevMonthKey(keyForPeriod(period));
+    return allExpenses.filter(e => e.date.startsWith(prevKey));
   }
 
   function render() {
@@ -214,15 +305,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const totalComparison = sum(comparison);
     const showDelta = period !== 'all-time';
 
-    const daysInPeriod = period === 'this-month'
-      ? now.getDate()
-      : new Date(lastMonthDate.getFullYear(), lastMonthDate.getMonth() + 1, 0).getDate();
+    const periodKey = period === 'all-time' ? null : keyForPeriod(period);
+    const daysInPeriod = periodKey === thisMonthKey ? now.getDate() : (periodKey ? daysInMonth(periodKey) : 0);
     const avgCurrent = period === 'all-time'
       ? (current.length ? totalCurrent / uniqueDayCount(current) : 0)
       : (daysInPeriod ? totalCurrent / daysInPeriod : 0);
     const avgComparison = comparison.length ? totalComparison / uniqueDayCount(comparison) : 0;
 
-    const subLabel = period === 'all-time' ? 'All Time' : PERIOD_LABELS[period];
+    const subLabel = period === 'all-time' ? 'All Time' : monthLabel(periodKey);
     document.getElementById('stat-total-spent-sub').textContent = subLabel;
 
     setText('stat-total-spent', formatMoney(totalCurrent));
@@ -348,6 +438,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  /* If the selected period is genuinely empty (not just filtered down to
+     nothing by category) but the account has data in some other month,
+     offer a direct way there — this is the only way out once the user has
+     deliberately chosen an empty period, since the dropdown itself can't
+     reach an arbitrary past month (see CLAUDE.md known gaps). */
+  function emptyStateMessage(current) {
+    if (current.length === 0 && period !== 'all-time') {
+      const fallbackKey = mostRecentMonthWithData();
+      const currentKey = keyForPeriod(period);
+      if (fallbackKey && fallbackKey !== currentKey) {
+        return `No expenses in ${monthNameOnly(currentKey)}. ` +
+          `<a href="#" id="jump-to-month-link" data-month="${fallbackKey}">View ${monthNameOnly(fallbackKey)} instead →</a>`;
+      }
+    }
+    return 'No expenses in this period — add one on the Expenses page.';
+  }
+
+  document.getElementById('recent-tbody')?.addEventListener('click', (e) => {
+    const link = e.target.closest('#jump-to-month-link');
+    if (!link) return;
+    e.preventDefault();
+    const fallbackKey = link.dataset.month;
+    if (!fallbackKey) return;
+    userChangedPeriod = true;
+    period = fallbackKey;
+    document.getElementById('date-range-label').textContent = monthLabel(fallbackKey);
+    document.querySelectorAll('#date-range-menu .dropdown-item').forEach(i => i.classList.remove('active'));
+    hideFallbackBanner();
+    render();
+  });
+
   /* ── Recent expenses table ──────────────────────────────────── */
   function renderRecentExpenses(current) {
     const tbody = document.getElementById('recent-tbody');
@@ -364,7 +485,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (recent.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5" class="empty-state">No expenses in this period — add one on the Expenses page.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${emptyStateMessage(current)}</td></tr>`;
       return;
     }
 
@@ -468,8 +589,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const largest = [...current].sort((a, b) => Number(b.amount) - Number(a.amount))[0];
     const avgPerExpense = current.length ? total / current.length : 0;
 
+    const periodLabel = period === 'all-time' ? 'All Time' : monthLabel(keyForPeriod(period));
     bodyEl.innerHTML = `
-      <p class="modal-stat"><strong>${PERIOD_LABELS[period] || 'All Time'}</strong> — ${current.length} expense${current.length !== 1 ? 's' : ''} totaling <strong>${formatMoney(total)}</strong></p>
+      <p class="modal-stat"><strong>${periodLabel}</strong> — ${current.length} expense${current.length !== 1 ? 's' : ''} totaling <strong>${formatMoney(total)}</strong></p>
       <p class="modal-stat">Top category: <strong>${topCategory ? escapeHtml(topCategory[0]) : '—'}</strong>${topCategory ? ` (${formatMoney(topCategory[1])})` : ''}</p>
       <p class="modal-stat">Average per expense: <strong>${formatMoney(avgPerExpense)}</strong></p>
       <p class="modal-stat">Biggest single expense: <strong>${largest ? escapeHtml(largest.description) : '—'}</strong>${largest ? ` (${formatMoney(Number(largest.amount))} on ${formatDate(largest.date)})` : ''}</p>

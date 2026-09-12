@@ -502,6 +502,12 @@ body { background: var(--bg); }
   font-size: 0.9375rem;
   white-space: normal !important;
 }
+.empty-state a {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+.empty-state a:hover { text-decoration: underline; }
 
 /* ── Insight banner ──────────────────────────────────────────── */
 .insight-banner {
@@ -536,6 +542,14 @@ body { background: var(--bg); }
   color: var(--text-secondary);
 }
 .insight-banner .btn-outline { background: var(--surface); }
+
+.fallback-banner {
+  background: var(--accent-50);
+  border-color: var(--accent);
+  margin-bottom: 24px;
+}
+.fallback-banner .insight-desc { color: var(--text); }
+.fallback-banner[hidden] { display: none; }
 
 /* ── Toast notifications ─────────────────────────────────────── */
 #toast-container {
