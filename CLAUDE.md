@@ -27,14 +27,15 @@ driver (`backend/db/schema.js`) — not SQLite/sql.js (a stray comment in
 `server.js` says "sql.js" but is wrong and should eventually be corrected).
 API base used by the frontend: `https://ledgr-api-hdhe.onrender.com/api`.
 
-Calendar-date columns (`DATE` type, e.g. `expenses.date`) need care: `pg`'s
+Calendar-date columns (`DATE` type, e.g. `expenses.date`) needed care: `pg`'s
 default parser turns them into a JS `Date` at local-server-midnight, which
-then serializes to a UTC timestamp — this silently shifts the calendar day
-for any server timezone ahead of UTC. Fix in progress: override the type
-parser for OID 1082 so `DATE` columns come back as plain `"YYYY-MM-DD"`
-strings, and never run a calendar-date string through `new Date()` on the
-frontend (no time component means no timezone, so it should be parsed as
-plain text, not local time).
+then serializes to a UTC timestamp — silently shifting the calendar day for
+any server timezone ahead of UTC. **Fixed** in `backend/db/schema.js` via
+`types.setTypeParser(1082, v => v)`, so `DATE` columns now come back as the
+plain `"YYYY-MM-DD"` string Postgres sent. Never run a calendar-date string
+through `new Date()` for bucketing or comparison on the frontend — only for
+display formatting (no time component means no timezone, so it should be
+parsed as plain text everywhere except when producing a human-readable label).
 
 Security middleware already in place — do not treat these as missing:
 - `helmet()` for security headers (`backend/server.js`)
@@ -66,6 +67,13 @@ repo (`DemonKing112/Montraq`, formerly `Ledgr` — the remote was renamed).
 - `formatDate()` is duplicated in three files (dashboard.js, expenses.js,
   reports.js) rather than shared. If you change date handling, change all
   three or none.
+- Dashboard date-range dropdown (`dashboard.html`/`dashboard.js`) can only
+  select "This Month", "Last Month", or "All Time" — there is no way to
+  pick an arbitrary past month. The empty-state "View [month] instead"
+  link works around this for one specific case (landing on an empty
+  period when data exists elsewhere), but the underlying gap is real and
+  independent of that fix. Undecided whether a proper month picker is
+  worth building.
 
 ## Working agreement
 
