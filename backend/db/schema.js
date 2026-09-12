@@ -1,6 +1,15 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+/* DATE columns (OID 1082) come back from pg as a JS Date parsed at
+   local-server-midnight, which then serializes to a UTC timestamp and
+   silently shifts the calendar day for any server timezone ahead of UTC.
+   A calendar date has no time component, so it should never go through
+   timezone-aware parsing at all — keep it as the plain "YYYY-MM-DD" string
+   Postgres actually sent. TIMESTAMPTZ columns (created_at, updated_at) are
+   untouched and still parse as real, timezone-aware Date objects. */
+types.setTypeParser(1082, (val) => val);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
