@@ -55,6 +55,18 @@ Push to `main` → Vercel auto-deploys the frontend, typically live in under a
 minute. Render handles the backend separately. Both watch this same GitHub
 repo (`DemonKing112/Montraq`, formerly `Ledgr` — the remote was renamed).
 
+## Known gaps — do not assume these work
+
+- Receipt scanning: `backend/routes/receipts.js` is a stub. It always
+  returns amount/vendor/date null with confidence 0. There is no OCR.
+  The landing page currently markets it as working; that copy is being
+  corrected.
+- PDF export: does not exist. Only CSV export is implemented, despite the
+  pricing table selling "CSV & PDF export" on the Pro tier.
+- `formatDate()` is duplicated in three files (dashboard.js, expenses.js,
+  reports.js) rather than shared. If you change date handling, change all
+  three or none.
+
 ## Working agreement
 
 The owner directs but does not write code. Explain a change in plain language
